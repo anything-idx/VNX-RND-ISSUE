@@ -1,0 +1,716 @@
+{
+  "cluster": "pve-hcm-c3",
+  "collected_at": "2026-10-27T09:00:00+07:00",
+  "source": "export từ /cluster/resources (đã rút gọn)",
+  "nodes": [
+    {
+      "node": "hcm-c3-n01",
+      "status": "online",
+      "cpu_cores": 64,
+      "mem_total": 549755813888
+    },
+    {
+      "node": "hcm-c3-n02",
+      "status": "online",
+      "cpu_cores": 64,
+      "mem_total": 549755813888
+    },
+    {
+      "node": "hcm-c3-n03",
+      "status": "online",
+      "cpu_cores": 48,
+      "mem_total": 412316860416
+    },
+    {
+      "node": "hcm-c3-n04",
+      "status": "offline",
+      "cpu_cores": 48,
+      "mem_total": 412316860416,
+      "note": "bảo trì thay RAM từ 25/10"
+    },
+    {
+      "node": "hcm-c3-n05",
+      "status": "online",
+      "cpu_cores": 64,
+      "mem_total": 549755813888
+    },
+    {
+      "node": "hcm-c3-n06",
+      "status": "online",
+      "cpu_cores": 32,
+      "mem_total": 262144
+    }
+  ],
+  "vms": [
+    {
+      "vmid": 2083,
+      "name": "s3-gw-816",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 2,
+      "cpu_usage": 0.98,
+      "mem_max": 47244640256,
+      "mem_used": 30234026161
+    },
+    {
+      "vmid": 2098,
+      "name": "db-ent-798",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.194,
+      "mem_max": 37580963840,
+      "mem_used": 26121713877
+    },
+    {
+      "vmid": 2057,
+      "name": "k8s-worker-295",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.923,
+      "mem_max": 94489280512,
+      "mem_used": 64795312947
+    },
+    {
+      "vmid": 2067,
+      "name": "wp-host-992",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 31.0,
+      "mem_max": 21474836480,
+      "mem_used": 13958587065
+    },
+    {
+      "vmid": 2008,
+      "name": "db-ent-415",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.883,
+      "mem_max": 73014444032,
+      "mem_used": 61996408121
+    },
+    {
+      "vmid": 2191,
+      "name": "mail-912",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.531,
+      "mem_max": 33285996544,
+      "mem_used": 22566784627
+    },
+    {
+      "vmid": 2275,
+      "name": "mail-872",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.105,
+      "mem_max": 25769803776,
+      "mem_used": 18794715949
+    },
+    {
+      "vmid": 2178,
+      "name": "cloud-std-453",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.167,
+      "mem_max": 19327352832,
+      "mem_used": 14173898442
+    },
+    {
+      "vmid": 2314,
+      "name": "old-mail-522",
+      "node": "hcm-c3-n03",
+      "status": "stopped",
+      "vcpus": 16,
+      "cpu_usage": 0,
+      "mem_max": 68719476736,
+      "mem_used": 0
+    },
+    {
+      "vmid": 2286,
+      "name": "wp-host-727",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.105,
+      "mem_max": 30064771072,
+      "mem_used": 18788153103
+    },
+    {
+      "vmid": 2073,
+      "name": "vps-nvme-430",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 2,
+      "cpu_usage": 98.0,
+      "mem_max": 37580963840,
+      "mem_used": 32211932607
+    },
+    {
+      "vmid": 2311,
+      "name": "old-s3-gw-300",
+      "node": "hcm-c3-n01",
+      "status": "stopped",
+      "vcpus": 16,
+      "cpu_usage": 0,
+      "mem_max": 68719476736,
+      "mem_used": 0
+    },
+    {
+      "vmid": 2084,
+      "name": "k8s-worker-557",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.787,
+      "mem_max": 49392123904,
+      "mem_used": 35419221406
+    },
+    {
+      "vmid": 2038,
+      "name": "db-ent-408",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 16,
+      "cpu_usage": 0.232,
+      "mem_max": 50465865728,
+      "mem_used": 32569038235
+    },
+    {
+      "vmid": 2268,
+      "name": "db-ent-831",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.269,
+      "mem_max": 24696061952,
+      "mem_used": 15997284943
+    },
+    {
+      "vmid": 2251,
+      "name": "s3-gw-908",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.49,
+      "mem_max": 21474836480,
+      "mem_used": 15319776217
+    },
+    {
+      "vmid": 2317,
+      "name": "old-s3-gw-589",
+      "node": "hcm-c3-n05",
+      "status": "stopped",
+      "vcpus": 16,
+      "cpu_usage": 0,
+      "mem_max": 68719476736,
+      "mem_used": 0
+    },
+    {
+      "vmid": 2301,
+      "name": "win-rds-850",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.063,
+      "mem_max": 8589934592,
+      "mem_used": 7452771568
+    },
+    {
+      "vmid": 2216,
+      "name": "k8s-worker-246",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.98,
+      "mem_max": 62277025792,
+      "mem_used": 51423628159
+    },
+    {
+      "vmid": 2208,
+      "name": "vps-nvme-899",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.525,
+      "mem_max": 24696061952,
+      "mem_used": 16386367323
+    },
+    {
+      "vmid": 2187,
+      "name": "s3-gw-746",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.116,
+      "mem_max": 20401094656,
+      "mem_used": 14785971909
+    },
+    {
+      "vmid": 2146,
+      "name": "s3-gw-170",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.234,
+      "mem_max": 12884901888,
+      "mem_used": 9945793248
+    },
+    {
+      "vmid": 2093,
+      "name": "k8s-worker-135",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.34,
+      "mem_max": 39728447488,
+      "mem_used": 30564670337
+    },
+    {
+      "vmid": 2126,
+      "name": "vps-nvme-938",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.303,
+      "mem_max": 19327352832,
+      "mem_used": 12894672333
+    },
+    {
+      "vmid": 2001,
+      "name": "gitlab-453",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.243,
+      "mem_max": 31138512896,
+      "mem_used": 25637171038
+    },
+    {
+      "vmid": 2201,
+      "name": "vps-nvme-926",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.89,
+      "mem_max": 84825604096,
+      "mem_used": 55588027384
+    },
+    {
+      "vmid": 2299,
+      "name": "gitlab-437",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.078,
+      "mem_max": 15032385536,
+      "mem_used": 9247443997
+    },
+    {
+      "vmid": 2076,
+      "name": "gitlab-671",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 2,
+      "cpu_usage": 0.726,
+      "mem_max": 20401094656,
+      "mem_used": 16325299081
+    },
+    {
+      "vmid": 2065,
+      "name": "cloud-std-682",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 20.8,
+      "mem_max": 11811160064,
+      "mem_used": 9364502137
+    },
+    {
+      "vmid": 2170,
+      "name": "gitlab-927",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 16,
+      "cpu_usage": 0.158,
+      "mem_max": 41875931136,
+      "mem_used": 26797553179
+    },
+    {
+      "vmid": 2117,
+      "name": "db-ent-869",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 16,
+      "cpu_usage": 0.072,
+      "mem_max": 17179869184,
+      "mem_used": 13048471775
+    },
+    {
+      "vmid": 2202,
+      "name": "s3-gw-957",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.98,
+      "mem_max": 40802189312,
+      "mem_used": 31661266732
+    },
+    {
+      "vmid": 2030,
+      "name": "win-rds-951",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.536,
+      "mem_max": 26843545600,
+      "mem_used": 18805973004
+    },
+    {
+      "vmid": 2122,
+      "name": "win-rds-880",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.18,
+      "mem_max": 33285996544,
+      "mem_used": 22937037540
+    },
+    {
+      "vmid": 2222,
+      "name": "s3-gw-742",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.496,
+      "mem_max": 47244640256,
+      "mem_used": 30955770984
+    },
+    {
+      "vmid": 2227,
+      "name": "vps-nvme-708",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.469,
+      "mem_max": 20401094656,
+      "mem_used": 14637347503
+    },
+    {
+      "vmid": 2046,
+      "name": "mail-769",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.304,
+      "mem_max": 36507222016,
+      "mem_used": 31984438755
+    },
+    {
+      "vmid": 2239,
+      "name": "gitlab-999",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.574,
+      "mem_max": 26843545600,
+      "mem_used": 17929362716
+    },
+    {
+      "vmid": 2027,
+      "name": "s3-gw-616",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 2,
+      "cpu_usage": 0.98,
+      "mem_max": 64424509440,
+      "mem_used": 45799746862
+    },
+    {
+      "vmid": 2001,
+      "name": "gitlab-453",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.243,
+      "mem_max": 31138512896,
+      "mem_used": 25637171038
+    },
+    {
+      "vmid": 2011,
+      "name": "win-rds-288",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.914,
+      "mem_max": 42949672960,
+      "mem_used": 32092495254
+    },
+    {
+      "vmid": 2111,
+      "name": "mail-524",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.232,
+      "mem_max": 37580963840,
+      "mem_used": 31258831738
+    },
+    {
+      "vmid": 2092,
+      "name": "cloud-std-889",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.348,
+      "mem_max": 18253611008,
+      "mem_used": 15663782810
+    },
+    {
+      "vmid": 2282,
+      "name": "k8s-worker-913",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.112,
+      "mem_max": 19327352832,
+      "mem_used": 13356492054
+    },
+    {
+      "vmid": 2199,
+      "name": "wp-host-377",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 12,
+      "cpu_usage": 0.477,
+      "mem_max": 53687091200,
+      "mem_used": null
+    },
+    {
+      "vmid": 2256,
+      "name": "k8s-worker-576",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 2,
+      "cpu_usage": 0.266,
+      "mem_max": 9663676416,
+      "mem_used": 7935033358
+    },
+    {
+      "vmid": 2291,
+      "name": "cloud-std-873",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.1,
+      "mem_max": 17179869184,
+      "mem_used": 11951203021
+    },
+    {
+      "vmid": 2262,
+      "name": "s3-gw-363",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.238,
+      "mem_max": 19327352832,
+      "mem_used": 14160609287
+    },
+    {
+      "vmid": 2390,
+      "name": "vps-nvme-512",
+      "node": "hcm-c3-n07",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.21,
+      "mem_max": 8589934592,
+      "mem_used": 5368709120
+    },
+    {
+      "vmid": 2055,
+      "name": "cloud-std-712",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.563,
+      "mem_max": 31138512896,
+      "mem_used": 19756404097
+    },
+    {
+      "vmid": 2021,
+      "name": "cloud-std-520",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.783,
+      "mem_max": 37580963840,
+      "mem_used": 27483659161
+    },
+    {
+      "vmid": 2023,
+      "name": "wp-host-816",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.517,
+      "mem_max": 41875931136,
+      "mem_used": 36277525153
+    },
+    {
+      "vmid": 2140,
+      "name": "mail-979",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.357,
+      "mem_max": 23622320128,
+      "mem_used": 15171403597
+    },
+    {
+      "vmid": 2304,
+      "name": "wp-host-340",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.114,
+      "mem_max": 10737418240,
+      "mem_used": 6784882739
+    },
+    {
+      "vmid": 2246,
+      "name": "wp-host-806",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.891,
+      "mem_max": 75161927680,
+      "mem_used": 55648576520
+    },
+    {
+      "vmid": 2163,
+      "name": "win-rds-278",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.274,
+      "mem_max": 31138512896,
+      "mem_used": 23330273763
+    },
+    {
+      "vmid": 2292,
+      "name": "k8s-worker-699",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 16,
+      "cpu_usage": 0.024,
+      "mem_max": 9663676416,
+      "mem_used": 5793659008
+    },
+    {
+      "vmid": 2034,
+      "name": "vps-nvme-217",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.765,
+      "mem_max": 33285996544,
+      "mem_used": 26850614223
+    },
+    {
+      "vmid": 2105,
+      "name": "mail-672",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.26,
+      "mem_max": 30064771072,
+      "mem_used": 23373618546
+    },
+    {
+      "vmid": 2225,
+      "name": "db-ent-516",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.822,
+      "mem_max": 63350767616,
+      "mem_used": 51370008965
+    },
+    {
+      "vmid": 2133,
+      "name": "wp-host-915",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.316,
+      "mem_max": 18253611008,
+      "mem_used": 13449136528
+    },
+    {
+      "vmid": 2054,
+      "name": "cloud-std-657",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.947,
+      "mem_max": 102005473280,
+      "mem_used": 66529127812
+    },
+    {
+      "vmid": 2018,
+      "name": "cloud-std-173",
+      "node": "hcm-c3-n01",
+      "status": "running",
+      "vcpus": 16,
+      "cpu_usage": 0.147,
+      "mem_max": 24696061952,
+      "mem_used": 20694992247
+    },
+    {
+      "vmid": 2270,
+      "name": "vps-nvme-617",
+      "node": "hcm-c3-n06",
+      "status": "running",
+      "vcpus": 8,
+      "cpu_usage": 0.106,
+      "mem_max": 16106127360,
+      "mem_used": 12674262576
+    },
+    {
+      "vmid": 2154,
+      "name": "wp-host-672",
+      "node": "hcm-c3-n03",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.417,
+      "mem_max": 24696061952,
+      "mem_used": 17736399224
+    },
+    {
+      "vmid": 2080,
+      "name": "db-ent-139",
+      "node": "hcm-c3-n02",
+      "status": "running",
+      "vcpus": 2,
+      "cpu_usage": 0.98,
+      "mem_max": 28991029248,
+      "mem_used": 24821040092
+    },
+    {
+      "vmid": 2236,
+      "name": "vps-nvme-722",
+      "node": "hcm-c3-n05",
+      "status": "running",
+      "vcpus": 4,
+      "cpu_usage": 0.98,
+      "mem_max": 84825604096,
+      "mem_used": 54153109206
+    }
+  ]
+}
