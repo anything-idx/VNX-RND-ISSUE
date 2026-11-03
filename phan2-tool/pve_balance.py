@@ -171,6 +171,39 @@ def build_node_index(
     return index
 
 
+def detect_duplicate_vmids(
+    vms_raw: list[Any], warnings: list[WarningItem]
+) -> tuple[set[Any], dict[Any, set[str]]]:
+    """VMID xuất hiện trên ≥2 node khác nhau → dirty (invariant cluster PVE)."""
+    locations: dict[Any, list[str]] = {}
+    for vm in vms_raw:
+        if not isinstance(vm, dict):
+            continue
+        vmid = vm.get("vmid")
+        node = vm.get("node")
+        if vmid is None or node is None:
+            continue
+        locations.setdefault(vmid, []).append(str(node))
+
+    dirty: set[Any] = set()
+    conflict_nodes: dict[Any, set[str]] = {}
+    for vmid, nodes in locations.items():
+        uniq = sorted(set(nodes))
+        if len(uniq) < 2:
+            continue
+        dirty.add(vmid)
+        conflict_nodes[vmid] = set(uniq)
+        _warn(
+            warnings,
+            "duplicate_vmid",
+            f"VMID {vmid} xuất hiện trên nhiều node: {', '.join(uniq)} "
+            f"(PVE yêu cầu unique trong cluster; first-seen cộng tải, cấm migrate ID này, "
+            f"đích conflict dùng tải pessimistic)",
+            ref=str(vmid),
+        )
+    return dirty, conflict_nodes
+
+
 def analyze(
     data: dict[str, Any],
     *,
@@ -180,19 +213,25 @@ def analyze(
 ) -> AnalysisResult:
     warnings: list[WarningItem] = []
     nodes = build_node_index(data.get("nodes", []), warnings)
+    dirty_vmids, conflict_nodes = detect_duplicate_vmids(data.get("vms", []), warnings)
 
     # Accumulator per node
     acc: dict[str, dict[str, Any]] = {
         name: {
             "cpu_used_cores": 0.0,
-            "mem_used": 0,
+            "mem_used": 0,  # báo cáo: chỉ mem đo được
+            "mem_reserve_null": 0,  # M6: Σ mem_max của VM mem_used=null
             "vcpu_alloc": 0,
             "skipped": [],
-            "running": [],  # list of vm dicts normalized
+            "running": [],
+            "has_null_mem": False,
+            "has_vmid_conflict": False,
         }
         for name in nodes
     }
-    orphan_running: list[dict[str, Any]] = []
+    seen_vmids: set[Any] = set()
+    counted_on: dict[Any, str] = {}  # vmid → node first-seen (đã cộng tải)
+    dirty_loads: dict[Any, dict[str, Any]] = {}  # tải canonical của dirty vmid
 
     for i, vm in enumerate(data.get("vms", [])):
         if not isinstance(vm, dict):
@@ -219,7 +258,6 @@ def analyze(
             continue
 
         if status != "running":
-            # stopped / khác: không tính vào tải thực dùng
             continue
 
         if nodes[node]["status"] != "online":
@@ -229,6 +267,11 @@ def analyze(
                 f"VM {vmid} running trên node {node} đang {nodes[node]['status']}",
                 ref=str(vmid),
             )
+
+        # Dup: dòng sau first-seen → không cộng tải lại
+        if vmid in seen_vmids:
+            continue
+        seen_vmids.add(vmid)
 
         try:
             vcpus = int(vm.get("vcpus"))
@@ -246,15 +289,39 @@ def analyze(
             acc[node]["skipped"].append(str(vmid))
             continue
 
+        raw_mem_used = vm.get("mem_used")
+        mem_null = raw_mem_used is None
         try:
-            mem_used = int(vm.get("mem_used") or 0)
-            mem_max = int(vm.get("mem_max") or 0)
+            if mem_null:
+                mem_max = int(vm.get("mem_max") or 0)
+                mem_used = 0
+            else:
+                mem_used = int(raw_mem_used)
+                mem_max = int(vm.get("mem_max") or 0)
         except (TypeError, ValueError):
             _warn(warnings, "bad_mem", f"VM {vmid} mem_* lỗi kiểu", ref=str(vmid))
             acc[node]["skipped"].append(str(vmid))
             continue
 
-        if mem_max > 0 and mem_used > mem_max * 1.05:
+        # M6: mem_used=null
+        if mem_null:
+            _warn(
+                warnings,
+                "null_mem_used",
+                f"VM {vmid} ({name}) trên {node}: mem_used=null",
+                ref=str(vmid),
+            )
+            if mem_max <= 0:
+                _warn(
+                    warnings,
+                    "null_mem_used_no_max",
+                    f"VM {vmid} mem_used=null và mem_max không hợp lệ; bỏ VM khỏi tải/migrate",
+                    ref=str(vmid),
+                )
+                acc[node]["skipped"].append(str(vmid))
+                continue
+
+        if not mem_null and mem_max > 0 and mem_used > mem_max * 1.05:
             _warn(
                 warnings,
                 "mem_used_gt_max",
@@ -263,6 +330,8 @@ def analyze(
             )
 
         cpu_used_cores = cpu_usage * vcpus
+        is_dirty = vmid in dirty_vmids
+        migrate_allowed = (not mem_null) and (not is_dirty)
         norm = {
             "vmid": int(vmid) if str(vmid).isdigit() else vmid,
             "name": name,
@@ -270,13 +339,27 @@ def analyze(
             "vcpus": vcpus,
             "cpu_usage": cpu_usage,
             "cpu_used_cores": cpu_used_cores,
-            "mem_used": mem_used,
+            "mem_used": 0 if mem_null else mem_used,  # báo cáo / kích thước migrate
             "mem_max": mem_max,
+            "mem_null": mem_null,
+            "migrate_allowed": migrate_allowed,
         }
         acc[node]["cpu_used_cores"] += cpu_used_cores
-        acc[node]["mem_used"] += mem_used
+        if not mem_null:
+            acc[node]["mem_used"] += mem_used
+        else:
+            acc[node]["mem_reserve_null"] += mem_max
+            acc[node]["has_null_mem"] = True
         acc[node]["vcpu_alloc"] += vcpus
         acc[node]["running"].append(norm)
+        counted_on[vmid] = node
+        if is_dirty:
+            acc[node]["has_vmid_conflict"] = True
+            dirty_loads[vmid] = {
+                "cpu_used_cores": cpu_used_cores,
+                "mem_used": 0 if mem_null else mem_used,
+                "vcpus": vcpus,
+            }
 
     node_loads: list[NodeLoad] = []
     for name, meta in nodes.items():
@@ -284,7 +367,9 @@ def analyze(
         cores = meta["cpu_cores"] or 1
         mem_total = meta["mem_total"] or 1
         cpu_pct = a["cpu_used_cores"] / cores if cores else 0.0
-        mem_pct = a["mem_used"] / mem_total if mem_total else 0.0
+        mem_pct_display = a["mem_used"] / mem_total if mem_total else 0.0
+        # M6: overload mem theo báo cáo + reserve null
+        mem_pct_decision = (a["mem_used"] + a["mem_reserve_null"]) / mem_total if mem_total else 0.0
         overcommit = a["vcpu_alloc"] / cores if cores else 0.0
 
         reasons: list[str] = []
@@ -293,12 +378,16 @@ def analyze(
             reasons.append(f"status={meta['status']}")
         if not meta["mem_sane"]:
             reasons.append("metrics_untrusted")
+        if a["has_null_mem"]:
+            reasons.append("mem_metrics_partial")
+        if a["has_vmid_conflict"]:
+            reasons.append("vmid_conflict")
         overloaded = False
         if valid:
             if cpu_pct >= cpu_threshold:
                 reasons.append(f"cpu>={cpu_threshold:.0%}")
                 overloaded = True
-            if mem_pct >= mem_threshold:
+            if mem_pct_decision >= mem_threshold:
                 reasons.append(f"mem>={mem_threshold:.0%}")
                 overloaded = True
             if overcommit >= overcommit_threshold:
@@ -314,7 +403,7 @@ def analyze(
                 cpu_used_cores=round(a["cpu_used_cores"], 3),
                 cpu_pct=round(cpu_pct, 4),
                 mem_used=a["mem_used"],
-                mem_pct=round(mem_pct, 4) if meta["mem_sane"] else -1.0,
+                mem_pct=round(mem_pct_display, 4) if meta["mem_sane"] else -1.0,
                 vcpu_alloc=a["vcpu_alloc"],
                 overcommit=round(overcommit, 3),
                 overloaded=overloaded,
@@ -332,10 +421,20 @@ def analyze(
         mem_threshold=mem_threshold,
         overcommit_threshold=overcommit_threshold,
         warnings=warnings,
+        conflict_nodes=conflict_nodes,
+        counted_on=counted_on,
+        dirty_loads=dirty_loads,
     )
 
-    # Recompute residual overload after plan (simulated)
-    residual = simulate_after(node_loads, acc, migrations, nodes, cpu_threshold, mem_threshold, overcommit_threshold)
+    residual = simulate_after(
+        node_loads,
+        acc,
+        migrations,
+        nodes,
+        cpu_threshold,
+        mem_threshold,
+        overcommit_threshold,
+    )
 
     return AnalysisResult(
         cluster=str(data.get("cluster", "unknown")),
@@ -377,13 +476,19 @@ def plan_migrations(
     mem_threshold: float,
     overcommit_threshold: float,
     warnings: list[WarningItem],
+    conflict_nodes: dict[Any, set[str]] | None = None,
+    counted_on: dict[Any, str] | None = None,
+    dirty_loads: dict[Any, dict[str, Any]] | None = None,
 ) -> list[Migration]:
-    loads = {n.node: n for n in node_loads}
-    # Working copies of usage
+    conflict_nodes = conflict_nodes or {}
+    counted_on = counted_on or {}
+    dirty_loads = dirty_loads or {}
+
     work = {
         name: {
             "cpu_used_cores": float(acc[name]["cpu_used_cores"]),
             "mem_used": int(acc[name]["mem_used"]),
+            "mem_reserve_null": int(acc[name]["mem_reserve_null"]),
             "vcpu_alloc": int(acc[name]["vcpu_alloc"]),
             "running": list(acc[name]["running"]),
         }
@@ -392,13 +497,35 @@ def plan_migrations(
 
     migrations: list[Migration] = []
 
+    def mem_decision(name: str) -> int:
+        """MEM dùng để quyết định overload / nhận migrate: báo cáo + reserve null."""
+        return work[name]["mem_used"] + work[name]["mem_reserve_null"]
+
+    def pessimistic_dirty_extra(dst: str) -> tuple[float, int, int]:
+        """Dirty VMID conflict chạm dst nhưng chưa cộng vào báo cáo dst → cộng thêm."""
+        extra_cpu = 0.0
+        extra_mem = 0
+        extra_vcpu = 0
+        for vmid, nodes in conflict_nodes.items():
+            if dst not in nodes:
+                continue
+            if counted_on.get(vmid) == dst:
+                continue  # đã nằm trong tải hiển thị dst
+            dl = dirty_loads.get(vmid)
+            if not dl:
+                continue
+            extra_cpu += float(dl["cpu_used_cores"])
+            extra_mem += int(dl["mem_used"])
+            extra_vcpu += int(dl["vcpus"])
+        return extra_cpu, extra_mem, extra_vcpu
+
     def current_load(name: str) -> NodeLoad:
         meta = nodes_meta[name]
         cores = meta["cpu_cores"] or 1
         mem_total = meta["mem_total"] or 1
         w = work[name]
         cpu_pct = w["cpu_used_cores"] / cores
-        mem_pct = w["mem_used"] / mem_total if meta["mem_sane"] else 999.0
+        mem_pct = mem_decision(name) / mem_total if meta["mem_sane"] else 999.0
         overcommit = w["vcpu_alloc"] / cores
         valid = bool(meta["mem_sane"]) and meta["status"] == "online"
         overloaded = False
@@ -429,7 +556,6 @@ def plan_migrations(
             valid=valid,
         )
 
-    # Ưu tiên giải phóng node quá tải theo mức mem/cpu vượt ngưỡng
     overloaded_names = [n.node for n in node_loads if n.overloaded]
     overloaded_names.sort(
         key=lambda n: max(current_load(n).mem_pct, current_load(n).cpu_pct),
@@ -437,10 +563,8 @@ def plan_migrations(
     )
 
     for src in overloaded_names:
-        # Sắp VM: ưu tiên VM nặng RAM trước (thường là bottleneck trên n01),
-        # sau đó đến CPU — dễ “nhấc” tải khỏi ngưỡng hơn.
         candidates = sorted(
-            work[src]["running"],
+            [v for v in work[src]["running"] if v.get("migrate_allowed", True)],
             key=lambda v: (v["mem_used"], v["cpu_used_cores"]),
             reverse=True,
         )
@@ -449,7 +573,6 @@ def plan_migrations(
             if not src_load.overloaded:
                 break
 
-            # Tìm đích: online, metrics tin cậy, còn headroom đủ cho VM, sau chuyển không overloaded
             best: tuple[float, str] | None = None
             for dst in sorted(work.keys()):
                 if dst == src:
@@ -457,10 +580,10 @@ def plan_migrations(
                 dst_meta = nodes_meta[dst]
                 if dst_meta["status"] != "online" or not dst_meta["mem_sane"]:
                     continue
-                # Simulate move
-                dst_cpu = work[dst]["cpu_used_cores"] + vm["cpu_used_cores"]
-                dst_mem = work[dst]["mem_used"] + vm["mem_used"]
-                dst_vcpu = work[dst]["vcpu_alloc"] + vm["vcpus"]
+                extra_cpu, extra_mem, extra_vcpu = pessimistic_dirty_extra(dst)
+                dst_cpu = work[dst]["cpu_used_cores"] + extra_cpu + vm["cpu_used_cores"]
+                dst_mem = mem_decision(dst) + extra_mem + vm["mem_used"]
+                dst_vcpu = work[dst]["vcpu_alloc"] + extra_vcpu + vm["vcpus"]
                 cores = dst_meta["cpu_cores"] or 1
                 mem_total = dst_meta["mem_total"] or 1
                 if dst_cpu / cores >= cpu_threshold:
@@ -469,7 +592,6 @@ def plan_migrations(
                     continue
                 if dst_vcpu / cores >= overcommit_threshold:
                     continue
-                # Điểm: còn bao nhiêu headroom mem sau khi nhận (càng nhiều càng tốt)
                 headroom = (mem_threshold * mem_total - dst_mem) / mem_total
                 if best is None or headroom > best[0]:
                     best = (headroom, dst)
@@ -490,7 +612,6 @@ def plan_migrations(
                     reason=reason,
                 )
             )
-            # Apply
             work[src]["cpu_used_cores"] -= vm["cpu_used_cores"]
             work[src]["mem_used"] -= vm["mem_used"]
             work[src]["vcpu_alloc"] -= vm["vcpus"]
@@ -523,14 +644,12 @@ def simulate_after(
     work = {
         name: {
             "cpu": float(acc[name]["cpu_used_cores"]),
-            "mem": int(acc[name]["mem_used"]),
+            "mem": int(acc[name]["mem_used"]) + int(acc[name]["mem_reserve_null"]),
             "vcpu": int(acc[name]["vcpu_alloc"]),
         }
         for name in acc
     }
-    # Need per-vm stats from migrations only — adjust by recorded amounts
-    # Re-find vm sizes from acc
-    vm_index: dict[int, dict[str, Any]] = {}
+    vm_index: dict[Any, dict[str, Any]] = {}
     for name in acc:
         for vm in acc[name]["running"]:
             vm_index[vm["vmid"]] = vm

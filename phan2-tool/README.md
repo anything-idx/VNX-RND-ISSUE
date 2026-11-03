@@ -58,6 +58,47 @@ python3 -m unittest discover -s tests -v
 3. VM trỏ `node` không tồn tại → warning `unknown_node`, bỏ qua.
 4. `mem_total` cực nhỏ (ví dụ `262144`) → đánh dấu node `metrics_untrusted`, không nhận migrate, `mem_pct` = n/a.
 5. JSON lỗi / thiếu `nodes`|`vms` → exit ≠ 0 kèm thông báo rõ, không traceback ẩn.
+6. **`duplicate_vmid`** — xem mục riêng bên dưới (ví dụ snapshot: `vmid=2001` trên `hcm-c3-n01` và `hcm-c3-n02`).
+7. **`null_mem_used`** — xem mục riêng bên dưới (ví dụ snapshot: VM `2199`, `mem_used: null`).
+
+### Vì sao bổ sung detect `duplicate_vmid` và `null_mem_used`?
+
+Khi chạy tool trên file đề (`cluster-pve-hcm-c3.json`), hai trường hợp dữ liệu bất thường từng bị **tính lặng lẽ, không cảnh báo**:
+
+| Case trong snapshot | Trước đây | Rủi ro |
+|---|---|---|
+| `vmid` **2001** xuất hiện trên **hai node** khác nhau (cùng tên/metrics) | Cộng tải vào cả hai node | Phóng đại tải cụm; có thể gợi ý migrate dựa trên “bản sao” không tin cậy |
+| VM **2199** có `mem_used: null` | `null` bị ép thành `0` (`or 0`) | Under-count RAM node → trông còn headroom → dễ đề xuất nhét thêm VM vào node đang mang guest “mù RAM” |
+
+Theo đề: tool không crash + **log cảnh báo rõ bản ghi bất thường** + ghi giả định. Phạm vi chỉ dùng JSON tĩnh (không API PVE để “đoán” node đúng).
+
+### Policy `duplicate_vmid` (nhiều VMID trùng đa node)
+
+**Giả định:** Trong một cluster PVE, VMID phải unique toàn cụm ([pmxcfs](https://pve.proxmox.com/pve-docs/chapter-pmxcfs.html)). Trùng trên ≥2 node = data bẩn / ghost / lỗi collector — tool **không** gọi API để chốt ownership.
+
+**Cách xử lý đã chọn:**
+
+1. Quét mọi `vmid` xuất hiện trên ≥2 node → warning `duplicate_vmid` (liệt kê các node).
+2. **Báo cáo tải:** mỗi `vmid` chỉ cộng **một lần** (first-seen trong `vms[]`) — tránh double-count.
+3. **Cấm migrate** mọi `vmid` dirty.
+4. **Cửa nhận migrate (pessimistic):** khi xét đích `D`, với mọi dirty vmid có `D` trong tập conflict mà **chưa** được cộng vào báo cáo của `D`, cộng thêm load dirty đó rồi mới so ngưỡng. Tránh under-count → nhầm còn headroom → nhét thêm tải vào node đang (có thể) mang guest conflict.
+5. Node conflict vẫn có thể là **nguồn** migrate nếu overload; chỉ đẩy các VM **sạch**.
+
+**Không chọn:** fail-hard cả file; cộng cả hai bản vào báo cáo; first-wins rồi nhận đích *không* pessimistic; module API ngoài JSON.
+
+### Policy `null_mem_used` (M6 — tách báo cáo / placement)
+
+**Giả định:** `mem_used: null` = không đo được RAM thực tại snapshot — **không** suy ra `0`. `mem_max` = trần cấp phát, dùng làm **reserve worst-case** khi quyết định quá tải / nhận migrate.
+
+**Cách xử lý đã chọn:**
+
+1. Warning `null_mem_used`.
+2. Có `mem_max > 0`: **báo cáo MEM không cộng** RAM null; **CPU/vCPU vẫn cộng**; gắn reason `mem_metrics_partial`.
+3. **Cấm migrate** VM null.
+4. **Overload nguồn + cửa nhận đích:** `mem_quyết_định = mem_báo_cáo + Σ mem_max` của mọi VM null trên node đó (pessimistic).
+5. Không có `mem_max` hợp lệ → warning `null_mem_used_no_max`, bỏ VM khỏi tải/migrate.
+
+**Không chọn:** `null → 0` (kể cả có warn); cộng `mem_max` vào cột MEM báo cáo (đó là policy khác, đội số hiển thị).
 
 ## Ví dụ output (rút gọn)
 
