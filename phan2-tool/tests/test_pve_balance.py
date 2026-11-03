@@ -193,10 +193,98 @@ class DuplicateVmidTests(unittest.TestCase):
         codes = [w.code for w in result.warnings]
         self.assertIn("duplicate_vmid", codes)
         by = {n.node: n for n in result.nodes}
-        # first-seen trên n1: cộng 20GiB; n2 không cộng lần 2
+        # first-valid trên n1: cộng 20GiB; n2 không cộng lần 2
         self.assertEqual(by["n1"].mem_used, 60 * 1024**3)
         self.assertEqual(by["n2"].mem_used, 0)
+        self.assertIn("vmid_conflict", by["n1"].reasons)
+        self.assertIn("vmid_conflict", by["n2"].reasons)
         self.assertNotIn(2001, {m.vmid for m in result.migrations})
+
+    def test_first_invalid_then_second_valid_wins(self):
+        gi = 1024**3
+        data = {
+            "cluster": "dup-bad-first",
+            "collected_at": "2026-01-01T00:00:00+07:00",
+            "nodes": [
+                {"node": "n1", "status": "online", "cpu_cores": 8, "mem_total": 64 * gi},
+                {"node": "n2", "status": "online", "cpu_cores": 8, "mem_total": 64 * gi},
+            ],
+            "vms": [
+                {
+                    "vmid": 2001,
+                    "name": "bad",
+                    "node": "n1",
+                    "status": "running",
+                    "vcpus": "x",
+                    "cpu_usage": 0.5,
+                    "mem_max": 10 * gi,
+                    "mem_used": 8 * gi,
+                },
+                {
+                    "vmid": 2001,
+                    "name": "good",
+                    "node": "n2",
+                    "status": "running",
+                    "vcpus": 2,
+                    "cpu_usage": 0.5,
+                    "mem_max": 10 * gi,
+                    "mem_used": 8 * gi,
+                },
+            ],
+        }
+        result = analyze(data)
+        by = {n.node: n for n in result.nodes}
+        self.assertEqual(by["n1"].mem_used, 0)
+        self.assertEqual(by["n2"].mem_used, 8 * gi)
+        self.assertAlmostEqual(by["n2"].cpu_used_cores, 1.0)
+
+    def test_dirty_null_mem_pessimistic_on_other_node(self):
+        gi = 1024**3
+        data = {
+            "cluster": "dup-null",
+            "collected_at": "2026-01-01T00:00:00+07:00",
+            "nodes": [
+                {"node": "n1", "status": "online", "cpu_cores": 8, "mem_total": 32 * gi},
+                {"node": "n2", "status": "online", "cpu_cores": 8, "mem_total": 32 * gi},
+            ],
+            "vms": [
+                {
+                    "vmid": 2001,
+                    "name": "dupnull",
+                    "node": "n1",
+                    "status": "running",
+                    "vcpus": 2,
+                    "cpu_usage": 0.1,
+                    "mem_max": 28 * gi,
+                    "mem_used": None,
+                },
+                {
+                    "vmid": 2001,
+                    "name": "dupnull",
+                    "node": "n2",
+                    "status": "running",
+                    "vcpus": 2,
+                    "cpu_usage": 0.1,
+                    "mem_max": 28 * gi,
+                    "mem_used": None,
+                },
+                {
+                    "vmid": 40,
+                    "name": "heavy",
+                    "node": "n1",
+                    "status": "running",
+                    "vcpus": 2,
+                    "cpu_usage": 0.9,
+                    "mem_max": 8 * gi,
+                    "mem_used": 6 * gi,
+                },
+            ],
+        }
+        result = analyze(data, cpu_threshold=0.99, mem_threshold=0.85, overcommit_threshold=8.0)
+        # n2 báo cáo mem=0 nhưng pessimistic +28GiB → không nhận heavy 6GiB
+        self.assertFalse(any(m.to_node == "n2" for m in result.migrations))
+        by = {n.node: n for n in result.nodes}
+        self.assertIn("vmid_conflict", by["n2"].reasons)
 
     def test_duplicate_dest_pessimistic_blocks_inbound(self):
         """n2 conflict nhưng chưa cộng dirty → nhận migrate phải kể load dirty."""

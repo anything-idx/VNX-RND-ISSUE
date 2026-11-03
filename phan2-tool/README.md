@@ -78,11 +78,13 @@ Theo đề: tool không crash + **log cảnh báo rõ bản ghi bất thường*
 
 **Cách xử lý đã chọn:**
 
-1. Quét mọi `vmid` xuất hiện trên ≥2 node → warning `duplicate_vmid` (liệt kê các node).
-2. **Báo cáo tải:** mỗi `vmid` chỉ cộng **một lần** (first-seen trong `vms[]`) — tránh double-count.
+1. Quét mọi `vmid` xuất hiện trên ≥2 node → warning `duplicate_vmid` (liệt kê các node); reason `vmid_conflict` gắn **mọi** node trong tập conflict.
+2. **Báo cáo tải:** mỗi `vmid` chỉ cộng **một lần** (**first-valid** trong `vms[]` — bỏ qua bản ghi lỗi kiểu/thiếu field, không khóa `seen` sớm) — tránh double-count.
 3. **Cấm migrate** mọi `vmid` dirty.
-4. **Cửa nhận migrate (pessimistic):** khi xét đích `D`, với mọi dirty vmid có `D` trong tập conflict mà **chưa** được cộng vào báo cáo của `D`, cộng thêm load dirty đó rồi mới so ngưỡng. Tránh under-count → nhầm còn headroom → nhét thêm tải vào node đang (có thể) mang guest conflict.
-5. Node conflict vẫn có thể là **nguồn** migrate nếu overload; chỉ đẩy các VM **sạch**.
+4. **Pessimistic trên node conflict (nguồn overload + cửa nhận đích):** với mọi dirty vmid có node `N` trong conflict mà **chưa** được cộng vào báo cáo của `N`, cộng thêm load dirty (kèm `mem_reserve`/`mem_max` nếu dirty từng `mem_used=null`) rồi mới so ngưỡng. Tránh under-count → nhầm còn headroom / bỏ sót overload.
+5. Chỉ migrate các VM **sạch** ra khỏi nguồn overload.
+
+**Ghi chú đọc bảng:** cột CPU%/MEM%/OVC = tải **báo cáo** (không đội dirty chưa first-valid). Cờ `OVERLOAD` / quyết định migrate dùng tải **pessimistic**. Bảng NODE = trước migrate; dòng “Còn overload sau plan” = sau gợi ý.
 
 **Không chọn:** fail-hard cả file; cộng cả hai bản vào báo cáo; first-wins rồi nhận đích *không* pessimistic; module API ngoài JSON.
 
@@ -95,7 +97,7 @@ Theo đề: tool không crash + **log cảnh báo rõ bản ghi bất thường*
 1. Warning `null_mem_used`.
 2. Có `mem_max > 0`: **báo cáo MEM không cộng** RAM null; **CPU/vCPU vẫn cộng**; gắn reason `mem_metrics_partial`.
 3. **Cấm migrate** VM null.
-4. **Overload nguồn + cửa nhận đích:** `mem_quyết_định = mem_báo_cáo + Σ mem_max` của mọi VM null trên node đó (pessimistic).
+4. **Overload nguồn + cửa nhận đích:** `mem_quyết_định = mem_báo_cáo + Σ mem_max` của mọi VM null trên node đó (pessimistic). Cột MEM% trên bảng vẫn là báo cáo — có thể thấp hơn mức dùng để gắn `OVERLOAD`.
 5. Không có `mem_max` hợp lệ → warning `null_mem_used_no_max`, bỏ VM khỏi tải/migrate.
 
 **Không chọn:** `null → 0` (kể cả có warn); cộng `mem_max` vào cột MEM báo cáo (đó là policy khác, đội số hiển thị).
@@ -125,7 +127,7 @@ Warnings (N):
 
 ## Giới hạn biết trước
 
-- Thuật toán migrate là greedy (ưu tiên VM nặng RAM trên node overload) — đủ cho snapshot vận hành, chưa tối ưu toàn cục / chưa xét affinity, local disk, live-migrate cost.
+- Thuật toán migrate là greedy **một vòng** trên các node overload lúc đầu (ưu tiên VM nặng RAM) — đủ cho snapshot vận hành; chưa lặp lại đến hết overload, chưa tối ưu toàn cục / chưa xét affinity, local disk, live-migrate cost.
 - Không gọi API Proxmox; chỉ phân tích file JSON tĩnh.
 
 ## Thiết kế trước khi code
@@ -147,110 +149,106 @@ HÀM chính(file_json):
   in bảng hoặc JSON(kết_quả)
 
 
+HÀM dirty_extra(node, conflict_nodes, counted_on, dirty_loads):
+  // Pessimistic: dirty chạm node nhưng chưa cộng vào báo cáo node
+  extra_cpu, extra_mem, extra_vcpu ← 0
+  VỚI MỖI vmid, nodes TRONG conflict_nodes:
+      NẾU node ∉ nodes: TIẾP
+      NẾU counted_on[vmid] = node: TIẾP          // đã nằm trên báo cáo
+      dl ← dirty_loads[vmid]
+      extra_cpu  += dl.cpu
+      extra_mem  += dl.mem + dl.mem_reserve     // mem_reserve = mem_max nếu null
+      extra_vcpu += dl.vcpus
+  TRẢ VỀ (extra_cpu, extra_mem, extra_vcpu)
+
+
+HÀM tải_quyết_định(node, tải, ...):
+  (ex_cpu, ex_mem, ex_vcpu) ← dirty_extra(node, ...)
+  cpu  ← tải[node].cpu  + ex_cpu
+  mem  ← tải[node].mem  + tải[node].mem_reserve_null + ex_mem
+  vcpu ← tải[node].vcpu + ex_vcpu
+  TRẢ VỀ (cpu, mem, vcpu)
+
+
 HÀM phân_tích(data):
-  nodes ← lập_chỉ_mục_node(data.nodes)      // tên → {cores, mem, status, mem_sane}
-  tải ← {}                                  // cộng dồn theo node
+  nodes ← lập_chỉ_mục_node(data.nodes)
+  dirty_vmids, conflict_nodes ← phát_hiện_vmid_trùng_đa_node(data.vms)  // warn duplicate_vmid
+  tải ← {}
+  counted_on ← {}      // vmid → node first-valid
+  dirty_loads ← {}
 
   VỚI MỖI node TRONG nodes:
-      tải[node] ← {cpu: 0, mem: 0, vcpu: 0, ds_vm_running: []}
+      tải[node] ← {cpu: 0, mem: 0, mem_reserve_null: 0, vcpu: 0, ds_vm_running: []}
 
   VỚI MỖI vm TRONG data.vms:
-      NẾU vm không hợp lệ / thiếu node / node lạ:
-          cảnh_báo; BỎ_QUA
-      NẾU vm.status ≠ "running":
-          BỎ_QUA                               // stopped không tính tải
+      NẾU vm không hợp lệ / thiếu node / node lạ: cảnh_báo; BỎ_QUA
+      NẾU vm.status ≠ "running": BỎ_QUA
+      NẾU vm.vmid ∈ counted_on: BỎ_QUA          // đã có bản hợp lệ — không cộng đôi
 
-      cpu_usage ← chuẩn_hóa_về_[0,1](vm.cpu_usage)
-      NẾU cpu_usage = null HOẶC vcpus lỗi:
-          đánh_dấu_skipped; BỎ_QUA
+      chuẩn_hóa cpu / vcpus / mem
+      NẾU lỗi kiểu: cảnh_báo; BỎ_QUA            // CHƯA ghi counted_on
 
-      đóng_góp_cpu ← cpu_usage × vm.vcpus
-      tải[vm.node].cpu  += đóng_góp_cpu
-      tải[vm.node].mem  += vm.mem_used
-      tải[vm.node].vcpu += vm.vcpus
-      thêm vm (đã chuẩn hóa) vào tải[vm.node].ds_vm_running
+      // M6: mem_used = null
+      NẾU mem_used is null:
+          cảnh_báo null_mem_used
+          NẾU mem_max không hợp lệ: cảnh_báo; BỎ_QUA
+          cộng cpu/vcpu; KHÔNG cộng mem báo cáo
+          tải[node].mem_reserve_null += mem_max
+          migrate_allowed ← False
+      NGƯỢC_LẠI:
+          cộng cpu, mem, vcpu như thường
+          migrate_allowed ← (vm.vmid ∉ dirty_vmids)
+
+      NẾU vm.vmid ∈ dirty_vmids: migrate_allowed ← False
+
+      thêm vm chuẩn hóa vào tải[node].ds_vm_running
+      counted_on[vm.vmid] ← node                // chỉ SAU khi cộng thành công
+      NẾU dirty: lưu dirty_loads[vmid] (cpu, mem, mem_reserve, vcpus)
+
+  gắn reason vmid_conflict cho MỌI node trong conflict_nodes
 
   ds_NodeLoad ← []
   VỚI MỖI node TRONG nodes:
-      cpu%  ← tải[node].cpu  / cores
-      mem%  ← tải[node].mem  / mem_total
-      ovc   ← tải[node].vcpu / cores
-      valid ← (online VÀ mem_sane)
+      // Hiển thị: cpu%/mem%/ovc từ tải báo cáo (không đội dirty extra)
+      // Overload: dùng tải_quyết_định (báo cáo + reserve null + dirty pessimistic)
+      (cpu_d, mem_d, vcpu_d) ← tải_quyết_định(node, ...)
+      overloaded ← valid VÀ (cpu_d|mem_d|vcpu_d vượt ngưỡng)
+      thêm NodeLoad(...)
 
-      overloaded ← False
-      NẾU valid:
-          NẾU cpu% ≥ CPU_NGƯỠNG  HOẶC  mem% ≥ MEM_NGƯỠNG  HOẶC  ovc ≥ OVC_NGƯỠNG:
-              overloaded ← True
-
-      thêm NodeLoad(node, cpu%, mem%, ovc, overloaded, ...) vào ds_NodeLoad
-
-  migrations ← lập_kế_hoạch_migrate(ds_NodeLoad, tải, nodes)
-  residual   ← mô_phỏng_sau_migrate(tải, migrations, nodes)
-  TRẢ VỀ AnalysisResult(nodes, migrations, residual, warnings, ...)
+  migrations ← lập_kế_hoạch_migrate(...)
+  residual   ← mô_phỏng_sau_migrate(...)        // cũng cộng dirty_extra khi so ngưỡng
+  TRẢ VỀ AnalysisResult(...)
 
 
-HÀM lập_kế_hoạch_migrate(ds_NodeLoad, tải, nodes):
-  // Bản sao để giả lập — không sửa dữ liệu gốc
-  work ← sao_chép(tải)
+HÀM lập_kế_hoạch_migrate(...):
+  work ← sao_chép(tải)                          // gồm mem_reserve_null
   migrations ← []
-
-  nguồn_quá_tải ← [n | n.overloaded]
-  SẮP_XẾP nguồn_quá_tải GIẢM_DẦN theo max(mem%, cpu%)   // nặng nhất trước
+  nguồn_quá_tải ← [n | n.overloaded]            // list lúc đầu — greedy 1 vòng
+  SẮP_XẾP nguồn GIẢM_DẦN theo mức quyết_định
 
   VỚI MỖI src TRONG nguồn_quá_tải:
-      ds_vm ← SẮP_XẾP work[src].ds_vm_running
-               GIẢM_DẦN theo (mem_used, cpu_used)       // VM nặng trước
+      ds_vm ← VM trong work[src] có migrate_allowed
+               SẮP GIẢM_DẦN (mem_used, cpu_used)
 
       VỚI MỖI vm TRONG ds_vm:
-          NẾU src đã hết overload:
-              DỪNG vòng VM                              // sang node nguồn khác
+          NẾU src hết overload (theo tải_quyết_định): DỪNG vòng VM
 
-          đích_tốt_nhất ← null
-          headroom_max  ← -∞
+          đích_tốt_nhất ← null; headroom_max ← -∞
+          VỚI MỖI dst:
+              NẾU dst = src / offline / không tin_cậy: BỎ_QUA
+              (cpu0, mem0, vcpu0) ← tải_quyết_định(dst, work, ...)
+              cpu'  ← cpu0  + vm.cpu
+              mem'  ← mem0  + vm.mem
+              vcpu' ← vcpu0 + vm.vcpus
+              NẾU cpu'|mem'|vcpu' ≥ ngưỡng: BỎ_QUA
+              chọn dst còn headroom RAM lớn nhất
 
-          VỚI MỖI dst TRONG mọi node:
-              NẾU dst = src: BỎ_QUA
-              NẾU dst offline HOẶC không tin_cậy: BỎ_QUA
+          NẾU không có đích: BỎ_QUA vm
+          chốt Migration; cập nhật work[src]/work[dst]   // chỉ tải báo cáo; reserve null không theo VM sạch
 
-              // Giả lập: dst nhận vm
-              cpu'  ← work[dst].cpu  + vm.cpu
-              mem'  ← work[dst].mem  + vm.mem
-              vcpu' ← work[dst].vcpu + vm.vcpus
-
-              NẾU cpu'/cores ≥ CPU_NGƯỠNG: BỎ_QUA
-              NẾU mem'/mem_total ≥ MEM_NGƯỠNG: BỎ_QUA
-              NẾU vcpu'/cores ≥ OVC_NGƯỠNG: BỎ_QUA
-
-              // Còn bao nhiêu % RAM trước ngưỡng sau khi nhận
-              headroom ← (MEM_NGƯỠNG × mem_total − mem') / mem_total
-              NẾU headroom > headroom_max:
-                  headroom_max ← headroom
-                  đích_tốt_nhất ← dst
-
-          NẾU đích_tốt_nhất = null:
-              BỎ_QUA vm                                 // không chỗ nhận an toàn
-
-          // Chốt migrate + cập nhật work
-          thêm Migration(vm, từ=src, đến=đích_tốt_nhất)
-          trừ tài nguyên vm khỏi work[src]
-          cộng tài nguyên vm vào work[đích_tốt_nhất]
-
-      NẾU src vẫn overload:
-          cảnh_báo("không cân bằng đủ — thiếu headroom cluster")
+      NẾU src vẫn overload: cảnh_báo cannot_fully_balance
 
   TRẢ VỀ migrations
-
-
-HÀM mô_phỏng_sau_migrate(tải, migrations, nodes):
-  work ← sao_chép(tải)
-  VỚI MỖI m TRONG migrations:
-      chuyển tài nguyên VM từ m.from → m.to trên work
-
-  residual ← []
-  VỚI MỖI node online + tin_cậy:
-      NẾU work[node] vẫn ≥ ngưỡng (cpu/mem/ovc):
-          thêm node vào residual
-  TRẢ VỀ residual
 ```
 
-**Ý chính:** chỉ VM `running` tính tải → đánh overload theo ngưỡng → greedy giải phóng node nặng nhất (VM nặng RAM trước) sang đích còn nhiều headroom RAM nhất mà không vượt ngưỡng → mô phỏng lại để liệt kê residual.
+**Ý chính:** phát hiện dirty (dup / null) → báo cáo trung thực (first-valid, không bịa mem null) → overload & chọn đích theo tải **pessimistic** → greedy 1 vòng chỉ migrate VM sạch → residual sau plan.

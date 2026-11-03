@@ -197,11 +197,38 @@ def detect_duplicate_vmids(
             warnings,
             "duplicate_vmid",
             f"VMID {vmid} xuất hiện trên nhiều node: {', '.join(uniq)} "
-            f"(PVE yêu cầu unique trong cluster; first-seen cộng tải, cấm migrate ID này, "
-            f"đích conflict dùng tải pessimistic)",
+            f"(PVE yêu cầu unique trong cluster; first-valid cộng tải, cấm migrate ID này, "
+            f"node conflict dùng tải pessimistic khi overload/nhận migrate)",
             ref=str(vmid),
         )
     return dirty, conflict_nodes
+
+
+def dirty_extra_for_node(
+    node: str,
+    conflict_nodes: dict[Any, set[str]],
+    counted_on: dict[Any, str],
+    dirty_loads: dict[Any, dict[str, Any]],
+) -> tuple[float, int, int]:
+    """Pessimistic: dirty chạm node nhưng chưa cộng vào báo cáo node → cộng thêm.
+
+    mem = mem_used báo cáo của dirty + mem_reserve (mem_max nếu dirty từng null).
+    """
+    extra_cpu = 0.0
+    extra_mem = 0
+    extra_vcpu = 0
+    for vmid, nodes in conflict_nodes.items():
+        if node not in nodes:
+            continue
+        if counted_on.get(vmid) == node:
+            continue
+        dl = dirty_loads.get(vmid)
+        if not dl:
+            continue
+        extra_cpu += float(dl["cpu_used_cores"])
+        extra_mem += int(dl["mem_used"]) + int(dl.get("mem_reserve", 0))
+        extra_vcpu += int(dl["vcpus"])
+    return extra_cpu, extra_mem, extra_vcpu
 
 
 def analyze(
@@ -229,9 +256,8 @@ def analyze(
         }
         for name in nodes
     }
-    seen_vmids: set[Any] = set()
-    counted_on: dict[Any, str] = {}  # vmid → node first-seen (đã cộng tải)
-    dirty_loads: dict[Any, dict[str, Any]] = {}  # tải canonical của dirty vmid
+    counted_on: dict[Any, str] = {}  # vmid → node first-valid (đã cộng tải)
+    dirty_loads: dict[Any, dict[str, Any]] = {}
 
     for i, vm in enumerate(data.get("vms", [])):
         if not isinstance(vm, dict):
@@ -268,10 +294,9 @@ def analyze(
                 ref=str(vmid),
             )
 
-        # Dup: dòng sau first-seen → không cộng tải lại
-        if vmid in seen_vmids:
+        # Dup: đã có bản valid → không cộng lại (first-valid wins)
+        if vmid in counted_on:
             continue
-        seen_vmids.add(vmid)
 
         try:
             vcpus = int(vm.get("vcpus"))
@@ -339,7 +364,7 @@ def analyze(
             "vcpus": vcpus,
             "cpu_usage": cpu_usage,
             "cpu_used_cores": cpu_used_cores,
-            "mem_used": 0 if mem_null else mem_used,  # báo cáo / kích thước migrate
+            "mem_used": 0 if mem_null else mem_used,
             "mem_max": mem_max,
             "mem_null": mem_null,
             "migrate_allowed": migrate_allowed,
@@ -352,25 +377,38 @@ def analyze(
             acc[node]["has_null_mem"] = True
         acc[node]["vcpu_alloc"] += vcpus
         acc[node]["running"].append(norm)
-        counted_on[vmid] = node
+        counted_on[vmid] = node  # chỉ sau khi cộng tải thành công
         if is_dirty:
-            acc[node]["has_vmid_conflict"] = True
             dirty_loads[vmid] = {
                 "cpu_used_cores": cpu_used_cores,
                 "mem_used": 0 if mem_null else mem_used,
+                "mem_reserve": mem_max if mem_null else 0,
                 "vcpus": vcpus,
             }
+
+    # Gắn cờ conflict trên mọi node trong tập (không chỉ first-valid)
+    for _vmid, cnodes in conflict_nodes.items():
+        for n in cnodes:
+            if n in acc:
+                acc[n]["has_vmid_conflict"] = True
 
     node_loads: list[NodeLoad] = []
     for name, meta in nodes.items():
         a = acc[name]
         cores = meta["cpu_cores"] or 1
         mem_total = meta["mem_total"] or 1
-        cpu_pct = a["cpu_used_cores"] / cores if cores else 0.0
+        ex_cpu, ex_mem, ex_vcpu = dirty_extra_for_node(
+            name, conflict_nodes, counted_on, dirty_loads
+        )
+        cpu_pct_display = a["cpu_used_cores"] / cores if cores else 0.0
         mem_pct_display = a["mem_used"] / mem_total if mem_total else 0.0
-        # M6: overload mem theo báo cáo + reserve null
-        mem_pct_decision = (a["mem_used"] + a["mem_reserve_null"]) / mem_total if mem_total else 0.0
-        overcommit = a["vcpu_alloc"] / cores if cores else 0.0
+        overcommit_display = a["vcpu_alloc"] / cores if cores else 0.0
+        # Quyết định: báo cáo + reserve null + dirty pessimistic (nếu chưa nằm trên node)
+        cpu_pct_decision = (a["cpu_used_cores"] + ex_cpu) / cores if cores else 0.0
+        mem_pct_decision = (
+            (a["mem_used"] + a["mem_reserve_null"] + ex_mem) / mem_total if mem_total else 0.0
+        )
+        overcommit_decision = (a["vcpu_alloc"] + ex_vcpu) / cores if cores else 0.0
 
         reasons: list[str] = []
         valid = bool(meta["mem_sane"]) and meta["status"] == "online"
@@ -384,13 +422,13 @@ def analyze(
             reasons.append("vmid_conflict")
         overloaded = False
         if valid:
-            if cpu_pct >= cpu_threshold:
+            if cpu_pct_decision >= cpu_threshold:
                 reasons.append(f"cpu>={cpu_threshold:.0%}")
                 overloaded = True
             if mem_pct_decision >= mem_threshold:
                 reasons.append(f"mem>={mem_threshold:.0%}")
                 overloaded = True
-            if overcommit >= overcommit_threshold:
+            if overcommit_decision >= overcommit_threshold:
                 reasons.append(f"overcommit>={overcommit_threshold:.1f}x")
                 overloaded = True
 
@@ -401,11 +439,11 @@ def analyze(
                 cpu_cores=meta["cpu_cores"],
                 mem_total=meta["mem_total"],
                 cpu_used_cores=round(a["cpu_used_cores"], 3),
-                cpu_pct=round(cpu_pct, 4),
+                cpu_pct=round(cpu_pct_display, 4),
                 mem_used=a["mem_used"],
                 mem_pct=round(mem_pct_display, 4) if meta["mem_sane"] else -1.0,
                 vcpu_alloc=a["vcpu_alloc"],
-                overcommit=round(overcommit, 3),
+                overcommit=round(overcommit_display, 3),
                 overloaded=overloaded,
                 reasons=reasons,
                 skipped_vms=a["skipped"],
@@ -434,6 +472,9 @@ def analyze(
         cpu_threshold,
         mem_threshold,
         overcommit_threshold,
+        conflict_nodes=conflict_nodes,
+        counted_on=counted_on,
+        dirty_loads=dirty_loads,
     )
 
     return AnalysisResult(
@@ -497,36 +538,27 @@ def plan_migrations(
 
     migrations: list[Migration] = []
 
-    def mem_decision(name: str) -> int:
-        """MEM dùng để quyết định overload / nhận migrate: báo cáo + reserve null."""
-        return work[name]["mem_used"] + work[name]["mem_reserve_null"]
-
-    def pessimistic_dirty_extra(dst: str) -> tuple[float, int, int]:
-        """Dirty VMID conflict chạm dst nhưng chưa cộng vào báo cáo dst → cộng thêm."""
-        extra_cpu = 0.0
-        extra_mem = 0
-        extra_vcpu = 0
-        for vmid, nodes in conflict_nodes.items():
-            if dst not in nodes:
-                continue
-            if counted_on.get(vmid) == dst:
-                continue  # đã nằm trong tải hiển thị dst
-            dl = dirty_loads.get(vmid)
-            if not dl:
-                continue
-            extra_cpu += float(dl["cpu_used_cores"])
-            extra_mem += int(dl["mem_used"])
-            extra_vcpu += int(dl["vcpus"])
-        return extra_cpu, extra_mem, extra_vcpu
+    def decision_totals(name: str) -> tuple[float, int, int]:
+        """CPU/MEM/vCPU quyết định = báo cáo + reserve null + dirty pessimistic."""
+        w = work[name]
+        ex_cpu, ex_mem, ex_vcpu = dirty_extra_for_node(
+            name, conflict_nodes, counted_on, dirty_loads
+        )
+        return (
+            w["cpu_used_cores"] + ex_cpu,
+            w["mem_used"] + w["mem_reserve_null"] + ex_mem,
+            w["vcpu_alloc"] + ex_vcpu,
+        )
 
     def current_load(name: str) -> NodeLoad:
         meta = nodes_meta[name]
         cores = meta["cpu_cores"] or 1
         mem_total = meta["mem_total"] or 1
         w = work[name]
-        cpu_pct = w["cpu_used_cores"] / cores
-        mem_pct = mem_decision(name) / mem_total if meta["mem_sane"] else 999.0
-        overcommit = w["vcpu_alloc"] / cores
+        cpu_d, mem_d, vcpu_d = decision_totals(name)
+        cpu_pct = cpu_d / cores
+        mem_pct = mem_d / mem_total if meta["mem_sane"] else 999.0
+        overcommit = vcpu_d / cores
         valid = bool(meta["mem_sane"]) and meta["status"] == "online"
         overloaded = False
         reasons: list[str] = []
@@ -580,10 +612,10 @@ def plan_migrations(
                 dst_meta = nodes_meta[dst]
                 if dst_meta["status"] != "online" or not dst_meta["mem_sane"]:
                     continue
-                extra_cpu, extra_mem, extra_vcpu = pessimistic_dirty_extra(dst)
-                dst_cpu = work[dst]["cpu_used_cores"] + extra_cpu + vm["cpu_used_cores"]
-                dst_mem = mem_decision(dst) + extra_mem + vm["mem_used"]
-                dst_vcpu = work[dst]["vcpu_alloc"] + extra_vcpu + vm["vcpus"]
+                dst_cpu0, dst_mem0, dst_vcpu0 = decision_totals(dst)
+                dst_cpu = dst_cpu0 + vm["cpu_used_cores"]
+                dst_mem = dst_mem0 + vm["mem_used"]
+                dst_vcpu = dst_vcpu0 + vm["vcpus"]
                 cores = dst_meta["cpu_cores"] or 1
                 mem_total = dst_meta["mem_total"] or 1
                 if dst_cpu / cores >= cpu_threshold:
@@ -640,7 +672,14 @@ def simulate_after(
     cpu_threshold: float,
     mem_threshold: float,
     overcommit_threshold: float,
+    *,
+    conflict_nodes: dict[Any, set[str]] | None = None,
+    counted_on: dict[Any, str] | None = None,
+    dirty_loads: dict[Any, dict[str, Any]] | None = None,
 ) -> list[str]:
+    conflict_nodes = conflict_nodes or {}
+    counted_on = counted_on or {}
+    dirty_loads = dirty_loads or {}
     work = {
         name: {
             "cpu": float(acc[name]["cpu_used_cores"]),
@@ -671,10 +710,13 @@ def simulate_after(
         cores = meta["cpu_cores"] or 1
         mem_total = meta["mem_total"] or 1
         w = work[name]
+        ex_cpu, ex_mem, ex_vcpu = dirty_extra_for_node(
+            name, conflict_nodes, counted_on, dirty_loads
+        )
         if (
-            w["cpu"] / cores >= cpu_threshold
-            or w["mem"] / mem_total >= mem_threshold
-            or w["vcpu"] / cores >= overcommit_threshold
+            (w["cpu"] + ex_cpu) / cores >= cpu_threshold
+            or (w["mem"] + ex_mem) / mem_total >= mem_threshold
+            or (w["vcpu"] + ex_vcpu) / cores >= overcommit_threshold
         ):
             residual.append(name)
     return residual
@@ -717,7 +759,10 @@ def render_table(result: AnalysisResult) -> str:
         )
 
     lines.append("")
-    lines.append("Migrations đề xuất:")
+    lines.append(
+        "Migrations đề xuất:  (bảng NODE phía trên = trạng thái TRƯỚC migrate; "
+        "xem residual bên dưới cho sau plan)"
+    )
     if not result.migrations:
         lines.append("  (không cần / không tìm được phương án)")
     else:
@@ -727,11 +772,13 @@ def render_table(result: AnalysisResult) -> str:
                 f"[mem={format_bytes(m.mem_used)}, cpu≈{m.cpu_used_cores:.2f}c] — {m.reason}"
             )
 
+    lines.append("")
     if result.residual_overloaded:
-        lines.append("")
         lines.append(
             "Còn overload sau plan: " + ", ".join(result.residual_overloaded)
         )
+    else:
+        lines.append("Còn overload sau plan: (không)")
 
     if result.warnings:
         lines.append("")

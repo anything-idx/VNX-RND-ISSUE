@@ -1,6 +1,6 @@
-# Mô tả thuật toán (ngôn ngữ tự nhiên) — input cho AI viết code
+# Mô tả thuật toán (ngôn ngữ tự nhiên) — đối chiếu với `pve_balance.py`
 
-Tài liệu này ghi lại logic mong muốn **trước khi** nhờ AI sinh `pve_balance.py`. Dùng để đối chiếu: code chạy đúng ý hay lệch.
+Tài liệu ghi logic mong muốn và đã cập nhật theo policy dữ liệu bẩn (`duplicate_vmid`, `null_mem_used`). Dùng để đối chiếu code.
 
 ---
 
@@ -20,8 +20,8 @@ Không gọi API Proxmox. Chỉ phân tích file tĩnh. Chỉ VM đang `running`
 ## Ngưỡng mặc định (giả định vì đề không chốt)
 
 - CPU quá tải khi: tổng “core tương đương” dùng trên node / số core vật lý ≥ **85%**.
-- RAM quá tải khi: tổng `mem_used` của VM running / `mem_total` node ≥ **85%**.
-- Overcommit quá tải khi: tổng `vcpus` của VM running / `cpu_cores` ≥ **2.0**.
+- RAM quá tải khi: (theo **tải quyết định**, xem bên dưới) / `mem_total` node ≥ **85%**.
+- Overcommit quá tải khi: tổng `vcpus` (quyết định) / `cpu_cores` ≥ **2.0**.
 
 Người dùng có thể đổi ba ngưỡng này bằng tham số dòng lệnh.
 
@@ -39,18 +39,38 @@ Theo đề, `cpu_usage` từ 0 đến 1 là phần sử dụng trên số vCPU �
 - Nếu `> 1` và `≤ 100` → coi là %, chia 100, **ghi warning**.
 - Ngoài khoảng đó hoặc không phải số → **bỏ VM khỏi phép tính tải**, ghi warning (không ném exception).
 
-### RAM và overcommit
+### RAM và overcommit — hai lớp số
 
-- Cộng `mem_used` của mọi VM running trên node.
-- Overcommit = tổng `vcpus` running / `cpu_cores` (không nhân với `cpu_usage`).
+| Lớp | Dùng để | Cách tính |
+|---|---|---|
+| **Báo cáo** (cột bảng CPU%/MEM%/OVC) | Người đọc | Chỉ số đo được / first-valid; **không** đội bản dup chưa cộng; **không** cộng `mem_max` thay cho `mem_used=null` |
+| **Quyết định** (OVERLOAD, chọn đích, residual) | An toàn node | Báo cáo + `Σ mem_max` của VM null trên node + **dirty pessimistic** (dirty vmid conflict chạm node nhưng chưa first-valid trên node đó) |
 
 ### Node không đủ điều kiện nhận migrate
 
-- `status != online` (ví dụ `offline`) → bỏ qua khi chọn đích; không tính overload kiểu “cần giải phóng bằng migrate”.
-- `mem_total` nhỏ bất thường (**< 1 GiB**, ví dụ `262144`) → coi metrics **không tin cậy**: warning, không nhận VM migrate, phần trăm RAM có thể hiện n/a.
-- Node không tồn tại trong danh sách `nodes` nhưng VM vẫn trỏ tới (ví dụ `hcm-c3-n07`) → warning `unknown_node`, bỏ VM đó khỏi tính tải / migrate.
+- `status != online` → bỏ qua khi chọn đích.
+- `mem_total` < **1 GiB** → metrics không tin cậy: warning, không nhận migrate, MEM% = n/a.
+- Node không có trong `nodes` → warning `unknown_node`, bỏ VM.
 
-Tóm lại: **không migrate sang n04 (offline), n06 (mem lỗi), n07 (không tồn tại), hay bất kỳ node không online + không tin cậy.**
+---
+
+## Dữ liệu bẩn đặc biệt (có trong snapshot đề)
+
+### A. `duplicate_vmid` (cùng ID trên ≥2 node)
+
+- PVE: VMID unique trong cluster. Trùng = data bẩn; tool **không** gọi API chốt ownership.
+- Warn `duplicate_vmid`; reason `vmid_conflict` trên **mọi** node trong tập conflict.
+- **First-valid:** mỗi vmid chỉ cộng tải **một lần** sau khi bản ghi qua được kiểm tra kiểu. Bản lỗi **không** khóa bản tốt phía sau.
+- Cấm migrate mọi vmid dirty.
+- Pessimistic: khi đánh overload / nhận migrate vào node conflict chưa mang bản first-valid, cộng thêm load dirty (kèm `mem_reserve` nếu dirty từng null).
+
+### B. `null_mem_used` (M6)
+
+- `mem_used is null` → warn; **không** suy ra `0`.
+- Có `mem_max > 0`: cộng CPU/vCPU; **không** cộng RAM vào báo cáo; cộng `mem_max` vào `mem_reserve_null` (chỉ lớp quyết định); cấm migrate VM đó; reason `mem_metrics_partial`.
+- Không `mem_max` hợp lệ → warn `null_mem_used_no_max`, bỏ VM khỏi tải/migrate.
+
+Các case bẩn khác vẫn giữ: `cpu_usage` %, `unknown_node`, `suspicious_mem_total`, JSON lỗi.
 
 ---
 
@@ -58,75 +78,64 @@ Tóm lại: **không migrate sang n04 (offline), n06 (mem lỗi), n07 (không t�
 
 ### Bước 1 — Đọc JSON an toàn
 
-Đọc file → parse JSON. Root phải là object, có `nodes` và `vms` là array. Sai thì thoát với thông báo rõ, không traceback khó đọc.
+Đọc file → parse JSON. Root phải là object, có `nodes` và `vms` là array. Sai thì thoát với thông báo rõ.
 
-### Bước 2 — Lập chỉ mục node
+### Bước 2 — Lập chỉ mục node + phát hiện dup
 
-Với mỗi node: lấy tên, status, `cpu_cores`, `mem_total`. Thiếu trường / kiểu sai → warning. Đánh dấu `mem_sane` khi mem ≥ 1 GiB và cores > 0.
+Lập chỉ mục node (`mem_sane`, status…).  
+Quét `vms[]`: vmid xuất hiện trên ≥2 node khác nhau → `dirty_vmids` + `conflict_nodes` + warning.
 
-### Bước 3 — Cộng dồn tải từ VM
+### Bước 3 — Cộng dồn tải từ VM (báo cáo)
 
-Duyệt từng VM:
+Duyệt từng VM running:
 
-- Không phải object / thiếu field quan trọng → warning, bỏ qua.
-- `node` không có trong chỉ mục → warning unknown_node, bỏ qua.
-- `status != running` → bỏ qua (không cộng tải).
-- Normalize `cpu_usage` như trên; `vcpus` / `mem_used` lỗi → warning, bỏ qua.
-- Cộng đóng góp CPU/RAM/vCPU vào accumulator của node nguồn; giữ danh sách VM running đã chuẩn hóa trên node đó (phục vụ bước migrate).
+- Lỗi / unknown node / cpu|vcpus|mem kiểu sai → warn, bỏ qua (**chưa** đánh dấu counted).
+- Đã có `counted_on[vmid]` → bỏ qua (không cộng đôi).
+- `mem_used is null` → nhánh M6 ở trên.
+- Cộng CPU/RAM/vCPU theo báo cáo; ghi `counted_on` **sau** khi cộng thành công; nếu dirty → lưu `dirty_loads`.
+- `migrate_allowed = false` nếu dirty hoặc null mem.
 
-### Bước 4 — Đánh overload từng node
+Gắn `vmid_conflict` cho mọi node trong conflict set.
 
-Với mỗi node online và tin cậy:
+### Bước 4 — Đánh overload
 
-- `cpu_pct = cpu_used_cores / cpu_cores`
-- `mem_pct = mem_used / mem_total`
-- `overcommit = vcpu_alloc / cpu_cores`
+- Cột hiển thị: % từ tải báo cáo.
+- Cờ overloaded: so ngưỡng với **tải quyết định** (báo cáo + reserve null + dirty_extra).
 
-Node **overloaded** nếu bất kỳ chỉ số nào ≥ ngưỡng tương ứng. Ghi rõ lý do (cpu / mem / overcommit).
+### Bước 5 — Lập kế hoạch migrate (greedy một vòng)
 
-Node offline hoặc metrics không tin cậy: không coi là ứng viên nguồn/đích migrate kiểu bình thường; gắn cờ SKIP / lý do tương ứng trên báo cáo.
+1. Lấy node overloaded **lúc đầu**, nặng nhất trước (theo mức quyết định).
+2. Chỉ xét VM `migrate_allowed`.
+3. Đích: online + mem_sane; giả lập nhận bằng **tải quyết định đích + VM**; phải dưới cả 3 ngưỡng; chọn headroom RAM lớn nhất.
+4. Cập nhật bản sao tải báo cáo khi chốt migrate (`mem_reserve_null` không đi theo VM sạch).
+5. Không mở vòng lặp mới cho node vừa phát sinh overload — còn dư thì residual / `cannot_fully_balance`.
 
-### Bước 5 — Lập kế hoạch migrate (greedy)
+### Bước 6 — Residual
 
-Đây là phần “thuật toán cân bằng” — **không** tối ưu toàn cục, chỉ greedy đủ dùng snapshot vận hành.
-
-1. Lấy các node nguồn đang overloaded, **xử lý node nặng nhất trước** (theo `max(mem_pct, cpu_pct)` giảm dần).
-2. Trên mỗi nguồn: sắp VM running **nặng trước** (ưu tiên `mem_used` cao, rồi CPU đóng góp cao).
-3. Với từng VM, tìm node đích tốt nhất thỏa **tất cả**:
-   - Khác node nguồn.
-   - Online và metrics tin cậy.
-   - Sau khi **giả lập nhận** VM: `cpu_pct`, `mem_pct`, `overcommit` đều **strict dưới ngưỡng** (không đẩy đích vào overload).
-4. Nếu nhiều đích hợp lệ: chọn đích còn **nhiều headroom RAM nhất** sau khi nhận  
-   (`(mem_threshold × mem_total − mem_sau) / mem_total`).
-5. Không tìm được đích → bỏ VM đó, thử VM khác trên cùng nguồn.
-6. Khi chốt một migrate: cập nhật bản sao tải (trừ nguồn, cộng đích) rồi tiếp tục. Nếu nguồn đã hết overload thì chuyển sang nguồn khác.
-7. Nếu sau khi vét VM mà nguồn vẫn overload → warning kiểu “thiếu headroom cluster, không cân bằng đủ”.
-
-### Bước 6 — Mô phỏng residual
-
-Áp lại toàn bộ migration đã đề xuất lên bản sao tải; liệt kê node nào **vẫn** còn trên ngưỡng (residual). Giúp người đọc biết kế hoạch greedy chưa xong việc.
+Áp migrations lên bản sao; so ngưỡng với tải quyết định (có dirty_extra). Liệt kê node còn overload.
 
 ### Bước 7 — Output
 
-- Bảng: cluster, ngưỡng, từng node + cờ OVERLOAD/SKIP/ok, danh sách migrate, danh sách warning.
-- JSON: cùng thông tin, ổn định để pipe script khác.
+Bảng (trước migrate) + migrations + residual + warnings; hoặc JSON cùng schema.
 
 ---
 
-## Ràng buộc cứng khi AI viết code (checklist đối chiếu)
+## Ràng buộc cứng (checklist đối chiếu)
 
-- [ ] Normalize `cpu_usage` % → warning, không crash.
-- [ ] `mem_total` lỗi → warning + không nhận migrate; tool vẫn chạy.
-- [ ] Không đề xuất migrate sang node offline / unknown / metrics_untrusted.
-- [ ] Chỉ VM `running` vào tải và vào kế hoạch migrate.
-- [ ] Greedy: nguồn nặng → VM nặng → đích headroom RAM lớn nhất mà không vượt 3 ngưỡng.
-- [ ] Có unit test cho normalize, overload, không chọn đích xấu, JSON lỗi.
-- [ ] Chạy được trên `cluster-pve-hcm-c3.json` thật và in warning cho các case bẩn đã biết.
+- [x] Normalize `cpu_usage` % → warning, không crash.
+- [x] `mem_total` lỗi → warning + không nhận migrate; tool vẫn chạy.
+- [x] Không đề xuất migrate sang node offline / unknown / metrics_untrusted.
+- [x] Chỉ VM `running` vào tải; chỉ VM sạch vào kế hoạch migrate.
+- [x] Detect + warn `duplicate_vmid` / `null_mem_used`; first-valid; pessimistic quyết định.
+- [x] Greedy một vòng: nguồn nặng → VM nặng → đích headroom RAM lớn nhất không vượt ngưỡng.
+- [x] Unit test: normalize, overload, đích xấu, JSON lỗi, dup, null mem.
+- [x] Chạy được trên `cluster-pve-hcm-c3.json` và in warning case bẩn đã biết.
 
 ---
 
-## Việc cố ý chưa làm (ngoài scope lần này)
+## Việc cố ý chưa làm (ngoài scope)
 
 - Chi phí live-migrate, local disk, affinity / anti-affinity.
-- Tối ưu ILP / min-cost flow toàn cục.
-- Gọi API Proxmox để thực thi migrate.
+- Tối ưu ILP / min-cost flow / vòng lặp cân bằng đến hết.
+- Gọi API Proxmox để thực thi migrate hoặc reconcile ownership VMID.
+- Ưu tiên first-valid trên node online hơn offline (cạnh nhỏ còn lại).
