@@ -102,6 +102,16 @@ Theo đề: tool không crash + **log cảnh báo rõ bản ghi bất thường*
 
 **Không chọn:** `null → 0` (kể cả có warn); cộng `mem_max` vào cột MEM báo cáo (đó là policy khác, đội số hiển thị).
 
+## Đề xuất & hướng phát triển
+
+Tool bài này chỉ đọc JSON tĩnh + xử lý defensive. Gốc sạch nên sửa ở **collector/exporter** (chưa code API trong repo).
+
+**Snapshot đề bẩn nhiều lớp:** dup `vmid` (`2001`), `mem_used: null` (`2199`), `cpu_usage` thang %, node ghost (`n07`), `mem_total` dị thường (`n06`), node offline (`n04`). Nên validate/quarantine trước khi đưa sang balance.
+
+**Đề xuất collector:** unique `vmid`; `cpu_usage ∈ [0,1]`; `mem_used` số ≥ 0 (hoặc flag `mem_unavailable`); `vms[].node` ∈ `nodes`; sanity `mem_total`/`cpu_cores`; kèm QA summary khi export.
+
+**Hướng phát triển (live, chưa làm):** reconcile ownership/metrics qua PVE API; `--apply` chỉ khi hết warning integrity; ưu tiên first-valid trên node `online`.
+
 ## Ví dụ output (rút gọn)
 
 ```text
